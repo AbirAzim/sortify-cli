@@ -24,7 +24,21 @@ npm link
 sortify <folder> [options]
 ```
 
-## Usage
+## Easiest way to use it: just run `sortify`
+
+If you don't want to learn any flags, run it with nothing after it:
+
+```bash
+sortify
+```
+
+It'll ask you plain-language questions one at a time — which folder, whether
+to look inside subfolders, anything to skip, and it'll show you exactly what
+it plans to do (nothing is moved yet) before asking you to confirm. Answer
+"n" at any point and nothing changes. This is the recommended way to use
+`sortify` if the flag-based commands below feel like a lot.
+
+## Usage (flags, for scripting or power users)
 
 ```bash
 sortify ~/Downloads --dry-run
@@ -97,20 +111,40 @@ sortify suggest ~/Downloads/New_Folder --rename          # apply it (asks to con
 sortify suggest ~/Downloads/New_Folder --rename --yes    # apply it, no prompt
 ```
 
-Two modes, always available in that order:
+**By default this works completely offline — no account, no API key, no
+cost.** It looks at a declared project name (`name` in `package.json`,
+`Cargo.toml`, `pyproject.toml`, `go.mod`, `composer.json`, or the first
+heading in `README.md`) if there is one; otherwise it looks at a shared
+filename pattern (e.g. `invoice_2024_01.pdf`, `invoice_2024_02.pdf` →
+`Invoice`) or the dominant file category, plus a date range from file
+modification times. This is what you get automatically, every time.
 
-1. **Offline heuristic (always works, no network)** — the default. Prefers a
-   declared project name (reads `name` from `package.json`, `Cargo.toml`,
-   `pyproject.toml`, `go.mod`, `composer.json`, or the first heading in
-   `README.md`); otherwise looks at a shared filename pattern (e.g.
-   `invoice_2024_01.pdf`, `invoice_2024_02.pdf` → `Invoice`) or the dominant
-   file category, plus a date range from file modification times.
-2. **AI-powered (opt-in via API key)** — if an Anthropic API key is
-   available (`--api-key <key>`, or the `ANTHROPIC_API_KEY` environment
-   variable) and `--offline` isn't passed, `sortify` sends the file *names*
-   and category breakdown (never file contents) to Claude for a more natural
-   suggestion. Any failure — no key, bad key, no network, rate limit — falls
-   back to the offline heuristic automatically, with a note explaining why.
+### Optional: smarter suggestions via Claude (needs an API key)
+
+If you want a more natural-sounding suggestion, `sortify` can ask Claude
+instead — but only if you give it an API key; **without one, it just quietly
+uses the offline method above, which already works fine for most folders.**
+
+To turn this on:
+
+1. Create an account and an API key at
+   **[console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)**.
+   This is a separate, pay-as-you-go developer account — it is **not** the
+   same as a Claude.ai / Claude Pro subscription, and it needs a payment
+   method attached before it will make real requests. (Cost per suggestion
+   is tiny — a fraction of a cent — but it isn't free.)
+2. Give the key to `sortify` one of two ways:
+   ```bash
+   export ANTHROPIC_API_KEY="sk-ant-..."     # once per terminal session (or add to ~/.zshrc)
+   sortify suggest ~/Downloads/New_Folder
+
+   # or, without setting anything permanently:
+   sortify suggest ~/Downloads/New_Folder --api-key "sk-ant-..."
+   ```
+
+If the key is missing, wrong, or there's no internet connection, `sortify`
+doesn't error out — it silently falls back to the offline method and tells
+you why. You can also force offline mode on purpose with `--offline`.
 
 `--rename` refuses to touch a folder the project guard would also protect
 (`package.json`, `.git`, etc.), and resolves name collisions the same way as

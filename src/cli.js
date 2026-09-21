@@ -2,6 +2,8 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const readline = require('readline');
 const { Command } = require('commander');
 const { organize } = require('./organizer');
 const { detectProjectMarkers } = require('./guard');
@@ -10,8 +12,16 @@ const { undo } = require('./undo');
 const { suggestName } = require('./suggest');
 const pkg = require('../package.json');
 
+// Lets people type "~/Desktop" at an interactive prompt, where the shell
+// never gets a chance to expand it for them.
+function expandHome(p) {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
 function resolveExistingDir(folder) {
-  const targetDir = path.resolve(process.cwd(), folder);
+  const targetDir = path.resolve(process.cwd(), expandHome(folder));
   let stat;
   try {
     stat = fs.statSync(targetDir);
@@ -22,6 +32,121 @@ function resolveExistingDir(folder) {
     throw new Error(`not a directory: ${targetDir}`);
   }
   return targetDir;
+}
+
+function isYes(answer) {
+  return /^y(es)?$/i.test(answer.trim());
+}
+
+/**
+ * Wraps readline in a small line queue instead of chained rl.question()
+ * calls. Sequential question() calls on a non-TTY stream (piped input, or
+ * a user pasting several answers at once) can drop lines that arrive
+ * before the next question() attaches its listener — this queues every
+ * line as it arrives so nothing is lost regardless of timing.
+ */
+function createPrompter() {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
+  const queue = [];
+  const waiters = [];
+
+  rl.on('line', (line) => {
+    if (waiters.length > 0) {
+      waiters.shift()(line);
+    } else {
+      queue.push(line);
+    }
+  });
+
+  rl.on('close', () => {
+    while (waiters.length > 0) {
+      waiters.shift()('');
+    }
+  });
+
+  function ask(promptText) {
+    process.stdout.write(promptText);
+    if (queue.length > 0) {
+      return Promise.resolve(queue.shift());
+    }
+    return new Promise((resolve) => waiters.push(resolve));
+  }
+
+  return { ask, close: () => rl.close() };
+}
+
+/**
+ * A guided, plain-language walkthrough for people who don't want to learn
+ * the flags. Triggered when sortify is run with no arguments at all.
+ */
+async function runWizard() {
+  console.log("Hi! Let's organize a folder together — I'll explain each step.\n");
+  const { ask, close } = createPrompter();
+
+  try {
+    const folderAnswer = (await ask(`Which folder do you want to organize?\n(press Enter to use the current folder: ${process.cwd()})\n> `)).trim();
+    const folderInput = folderAnswer || '.';
+
+    let targetDir;
+    try {
+      targetDir = resolveExistingDir(folderInput);
+    } catch (err) {
+      console.log(`\nI couldn't find that folder (${err.message}). Nothing was changed.`);
+      return;
+    }
+
+    console.log(`\nGot it: ${targetDir}\n`);
+    console.log('Should I also look inside its subfolders?');
+    console.log('  1) No, just the files sitting directly in this folder (simplest, default)');
+    console.log('  2) Yes, one level of subfolders too');
+    console.log('  3) Yes, dig through everything, no matter how deep');
+    const depthChoice = (await ask('> ')).trim();
+    const depth = depthChoice === '2' ? 1 : depthChoice === '3' ? Infinity : 0;
+
+    const excludeAnswer = (await ask("\nAny folders you'd like me to leave alone? (type names separated by commas, or just press Enter for none)\n> ")).trim();
+    const exclude = excludeAnswer ? excludeAnswer.split(',').map((s) => s.trim()).filter(Boolean) : [];
+
+    const projectMarkers = detectProjectMarkers(targetDir);
+    if (projectMarkers.length > 0) {
+      console.log(`\nHeads up: this looks like a project folder (it has a ${projectMarkers[0]}), not a messy pile of files — organizing it could break it.`);
+      const proceedAnswer = await ask('Organize it anyway? (y/N)\n> ');
+      if (!isYes(proceedAnswer)) {
+        console.log('\nOkay, I left it alone. Nothing was changed.');
+        return;
+      }
+    }
+
+    console.log('\nOne moment, let me see what would happen...\n');
+    const preview = await organize({ targetDir, exclude, depth, dryRun: true, includeHidden: false, useDefaultExcludes: true });
+
+    if (preview.moves.length === 0) {
+      console.log("I didn't find anything that needs organizing here. All done!");
+      return;
+    }
+
+    const byCategory = new Map();
+    for (const move of preview.moves) {
+      byCategory.set(move.category, (byCategory.get(move.category) || 0) + 1);
+    }
+    console.log(`I can organize ${preview.moves.length} file(s) into ${byCategory.size} folder(s):`);
+    for (const [category, count] of [...byCategory.entries()].sort()) {
+      console.log(`  ${category}: ${count} file(s)`);
+    }
+
+    const confirmAnswer = await ask('\nGo ahead and do it now? (y/N)\n> ');
+    if (!isYes(confirmAnswer)) {
+      console.log('\nNo problem, nothing was changed. Run me again anytime.');
+      return;
+    }
+
+    const result = await organize({ targetDir, exclude, depth, dryRun: false, includeHidden: false, useDefaultExcludes: true });
+    console.log(`\nAll done! I organized ${result.moves.length} file(s).`);
+    if (result.run) {
+      console.log(`If you change your mind, undo it with: sortify undo --run ${result.run.id} "${folderInput}"`);
+    }
+  } finally {
+    close();
+  }
 }
 
 function collect(value, previous) {
@@ -45,7 +170,10 @@ const program = new Command();
 
 program
   .name('sortify')
-  .description('Organize the files in a folder into meaningfully named subfolders by content type (Images, Documents, Videos, ...).')
+  .description(
+    'Organize the files in a folder into meaningfully named subfolders by content type (Images, Documents, Videos, ...).\n\n' +
+      "Tip: not sure about the options below? Just run \"sortify\" by itself and I'll walk you through it step by step."
+  )
   .version(pkg.version)
   .argument('[folder]', 'Folder to organize', '.')
   .option('-e, --exclude <names...>', 'Folder names or relative paths to exclude (repeatable, or comma-separated)', collect, [])
@@ -268,11 +396,10 @@ program
     }
 
     if (!options.yes) {
-      const readline = require('readline');
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise((resolve) => rl.question(`\nRename "${targetDir}" to "${destPath}"? [y/N] `, resolve));
-      rl.close();
-      if (!/^y(es)?$/i.test(answer.trim())) {
+      const { ask, close } = createPrompter();
+      const answer = await ask(`\nRename "${targetDir}" to "${destPath}"? [y/N] `);
+      close();
+      if (!isYes(answer)) {
         console.log('Rename cancelled.');
         return;
       }
@@ -282,4 +409,8 @@ program
     console.log(`Renamed to: ${destPath}`);
   });
 
-program.parse();
+if (process.argv.slice(2).length === 0) {
+  runWizard();
+} else {
+  program.parse();
+}
