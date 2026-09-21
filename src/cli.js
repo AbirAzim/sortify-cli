@@ -10,6 +10,7 @@ const { detectProjectMarkers } = require('./guard');
 const { loadHistory: loadRunHistory } = require('./history');
 const { undo } = require('./undo');
 const { suggestName } = require('./suggest');
+const { suggestNameFromFiles } = require('./suggest/heuristic');
 const colors = require('./ui/colors');
 const { createProgressBar } = require('./ui/progress');
 const { createSpinner } = require('./ui/spinner');
@@ -63,15 +64,67 @@ function makeProgressHandler(label) {
 }
 
 function printMoveSummary(moves, { dryRun }) {
+  const byFolder = new Map();
+  for (const move of moves) {
+    const key = move.folder || move.category;
+    byFolder.set(key, (byFolder.get(key) || 0) + 1);
+  }
+  console.log(colors.bold(`${dryRun ? 'Would organize' : 'Organized'} ${moves.length} file(s) into ${byFolder.size} folder(s):`));
+  for (const [folder, count] of [...byFolder.entries()].sort()) {
+    console.log(`  ${colors.category(folder)}: ${count}`);
+  }
+  return byFolder;
+}
+
+function monthLabel(date) {
+  return date.toLocaleString('en-US', { month: 'short', year: 'numeric' }).replace(' ', '_');
+}
+
+/**
+ * When a batch of files is all one category (a folder that was already
+ * homogeneous), the category name alone — "Images", "Documents" — doesn't
+ * describe what's actually in it. Computes a better name using the same
+ * offline heuristic `suggest` uses, and whether the files span more than
+ * one month (which makes splitting into several dated folders an option),
+ * from the files already in hand — no extra scan, no network call.
+ */
+function analyzeHomogeneousBatch(moves, { dryRun }) {
   const byCategory = new Map();
   for (const move of moves) {
     byCategory.set(move.category, (byCategory.get(move.category) || 0) + 1);
   }
-  console.log(colors.bold(`${dryRun ? 'Would organize' : 'Organized'} ${moves.length} file(s) into ${byCategory.size} folder(s):`));
-  for (const [category, count] of [...byCategory.entries()].sort()) {
-    console.log(`  ${colors.category(category)}: ${count}`);
+  if (byCategory.size !== 1 || moves.length < 2) return null;
+
+  const [category] = [...byCategory.keys()];
+  const names = moves.map((m) => path.basename(m.from));
+
+  const fileDates = [];
+  for (const move of moves) {
+    try {
+      fileDates.push(new Date(fs.statSync(dryRun ? move.from : move.to).mtimeMs));
+    } catch {
+      // Best-effort only — skip a file that vanished in the meantime.
+    }
   }
-  return byCategory;
+  const dateRange = fileDates.length
+    ? { from: new Date(Math.min(...fileDates.map((d) => d.getTime()))), to: new Date(Math.max(...fileDates.map((d) => d.getTime()))) }
+    : null;
+
+  const suggestion = suggestNameFromFiles(names, new Map([[category, moves.length]]), dateRange);
+  const distinctMonths = new Set(fileDates.map((d) => `${d.getFullYear()}-${d.getMonth()}`));
+
+  return { category, suggestion, fileDates, canSplit: distinctMonths.size > 1 };
+}
+
+function printSingleCategoryTip(targetDir, moves, { dryRun }) {
+  const info = analyzeHomogeneousBatch(moves, { dryRun });
+  if (!info || !info.suggestion.name || info.suggestion.name.toLowerCase() === info.category.toLowerCase()) return;
+
+  const categoryPath = path.join(targetDir, info.category);
+  console.log('');
+  console.log(colors.info(`Tip: every file here is ${info.category} — "${info.category}" isn't very descriptive on its own.`));
+  console.log(colors.dim(`     Maybe rename it to "${info.suggestion.name}" (${info.suggestion.reason})`));
+  console.log(colors.dim(`     sortify suggest "${categoryPath}" --rename`));
 }
 
 /**
@@ -149,7 +202,50 @@ async function runWizard() {
   }
 
   console.log('');
-  printMoveSummary(preview.moves, { dryRun: true });
+  let previewMoves = preview.moves;
+  printMoveSummary(previewMoves, { dryRun: true });
+
+  let folderNameOverride;
+  const homogeneous = analyzeHomogeneousBatch(previewMoves, { dryRun: true });
+  if (homogeneous && homogeneous.suggestion.name && homogeneous.suggestion.name.toLowerCase() !== homogeneous.category.toLowerCase()) {
+    const { category, suggestion, fileDates, canSplit } = homogeneous;
+    console.log(colors.info(`\nEvery file here is ${category} — "${category}" alone isn't very descriptive.`));
+
+    const choices = [{ title: `Combine them into one folder called "${suggestion.name}"`, value: 'combine' }];
+    if (canSplit) {
+      choices.push({
+        title: `Split them into multiple folders, grouped by month (e.g. "${category}_${monthLabel(fileDates[0])}")`,
+        value: 'split',
+      });
+    }
+    choices.push({ title: `Keep the plain "${category}" folder`, value: 'plain' });
+
+    const { howToOrganize } = await prompts(
+      { type: 'select', name: 'howToOrganize', message: 'How would you like to organize these?', choices, initial: 0 },
+      { onCancel }
+    );
+
+    if (howToOrganize === 'combine') {
+      folderNameOverride = () => suggestion.name;
+    } else if (howToOrganize === 'split') {
+      folderNameOverride = ({ filePath, category: cat }) => {
+        let date;
+        try {
+          date = new Date(fs.statSync(filePath).mtimeMs);
+        } catch {
+          date = new Date();
+        }
+        return `${cat}_${monthLabel(date)}`;
+      };
+    }
+
+    if (folderNameOverride) {
+      const rescan = await organize({ targetDir, exclude, depth, dryRun: true, includeHidden: false, useDefaultExcludes: true, folderNameOverride });
+      previewMoves = rescan.moves;
+      console.log('');
+      printMoveSummary(previewMoves, { dryRun: true });
+    }
+  }
 
   const { confirmed } = await prompts({ type: 'confirm', name: 'confirmed', message: 'Go ahead and organize them now?', initial: false }, { onCancel });
   if (!confirmed) {
@@ -159,7 +255,7 @@ async function runWizard() {
 
   console.log('');
   const onProgress = makeProgressHandler('Organizing');
-  const result = await organize({ targetDir, exclude, depth, dryRun: false, includeHidden: false, useDefaultExcludes: true, onProgress });
+  const result = await organize({ targetDir, exclude, depth, dryRun: false, includeHidden: false, useDefaultExcludes: true, onProgress, folderNameOverride });
   console.log(colors.success(`\nAll done! I organized ${result.moves.length} file(s).`));
   if (result.run) {
     console.log(colors.dim(`If you change your mind, undo it with: sortify undo --run ${result.run.id} "${folder}"`));
@@ -257,6 +353,7 @@ program
 
       console.log('');
       printMoveSummary(moves, { dryRun: options.dryRun });
+      printSingleCategoryTip(targetDir, moves, { dryRun: options.dryRun });
       if (options.dryRun) {
         console.log(colors.dim('\nRun again without --dry-run to apply these changes.'));
       } else if (run) {

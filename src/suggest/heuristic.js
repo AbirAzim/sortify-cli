@@ -17,10 +17,24 @@ function toTitleCase(word) {
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
+// Default camera/screenshot/app-generated prefixes carry no real
+// information beyond "this is a photo/screenshot" — the category already
+// says that, so a name built from one of these (e.g. "Img_Mar_2024") isn't
+// actually more descriptive than "Images". Fall back to category+date
+// instead when the shared prefix is one of these.
+const GENERIC_PREFIXES = new Set([
+  'img', 'image', 'images', 'dsc', 'dscn', 'photo', 'photos', 'pic', 'pics',
+  'picture', 'pictures', 'screenshot', 'screenshots', 'screen_shot', 'shot',
+  'untitled', 'file', 'files', 'document', 'documents', 'doc', 'docs',
+  'video', 'videos', 'vid', 'clip', 'clips', 'mov', 'audio', 'track', 'tracks',
+  'recording', 'recordings', 'rec', 'scan', 'scans', 'copy',
+]);
+
 /**
  * Finds a shared filename prefix (e.g. "invoice" across invoice-2023-01.pdf,
  * invoice-2023-02.pdf, ...) as long as it actually covers most of the files
- * — a coincidental two-file match isn't a real pattern.
+ * — a coincidental two-file match isn't a real pattern — and isn't just a
+ * generic camera/app-generated prefix like "IMG" or "Screenshot".
  */
 function commonPrefix(names) {
   const stems = names.map((n) => n.replace(/\.[^.]+$/, ''));
@@ -38,6 +52,7 @@ function commonPrefix(names) {
 
   prefix = prefix.replace(/[-_\s0-9]+$/, '');
   if (prefix.length < 3) return null;
+  if (GENERIC_PREFIXES.has(prefix.toLowerCase())) return null;
 
   const matching = stems.filter((s) => s.toLowerCase().startsWith(prefix.toLowerCase())).length;
   if (matching / stems.length < 0.6) return null;
@@ -58,6 +73,45 @@ function formatDateRange(dateRange) {
     return String(from.getFullYear());
   }
   return `${from.getFullYear()}-${to.getFullYear()}`;
+}
+
+/**
+ * Pure, in-memory version of the heuristic: given filenames, a category
+ * breakdown, and a date range (no disk access), suggests a name plus the
+ * reasoning behind it. Shared by suggestNameHeuristic (which gathers these
+ * from a live folder) and callers that already have this data in hand —
+ * e.g. `organize()`'s move list, to flag a category folder that ended up
+ * holding everything under one generic name like "Images".
+ */
+function suggestNameFromFiles(names, categoryCounts, dateRange) {
+  if (names.length === 0) {
+    return { name: null, reason: 'No files to analyze.', mode: 'heuristic' };
+  }
+
+  const prefix = commonPrefix(names);
+  const dominant = [...categoryCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  const dateLabel = formatDateRange(dateRange);
+
+  const parts = [];
+  if (prefix) {
+    parts.push(toTitleCase(prefix));
+  } else if (dominant) {
+    parts.push(dominant[0]);
+  }
+  if (dateLabel) parts.push(dateLabel);
+
+  const name = sanitizeName(parts.join('_') || 'Sorted_Files');
+
+  const reasonParts = [];
+  if (prefix) reasonParts.push(`most filenames share the prefix "${prefix}"`);
+  else if (dominant) reasonParts.push(`mostly ${dominant[0]} files (${dominant[1]}/${names.length})`);
+  if (dateLabel) reasonParts.push(`dated around ${dateLabel}`);
+
+  return {
+    name,
+    reason: reasonParts.length ? `Based on ${reasonParts.join(' and ')}.` : "Based on the folder's general content.",
+    mode: 'heuristic',
+  };
 }
 
 /**
@@ -84,30 +138,7 @@ async function suggestNameHeuristic(targetDir, { depth = 1 } = {}) {
     return { name: null, reason: 'Folder has no files to analyze.', mode: 'heuristic' };
   }
 
-  const prefix = commonPrefix(analysis.names);
-  const dominant = [...analysis.categoryCounts.entries()].sort((a, b) => b[1] - a[1])[0];
-  const dateLabel = formatDateRange(analysis.dateRange);
-
-  const parts = [];
-  if (prefix) {
-    parts.push(toTitleCase(prefix));
-  } else if (dominant) {
-    parts.push(dominant[0]);
-  }
-  if (dateLabel) parts.push(dateLabel);
-
-  const name = sanitizeName(parts.join('_') || 'Sorted_Files');
-
-  const reasonParts = [];
-  if (prefix) reasonParts.push(`most filenames share the prefix "${prefix}"`);
-  else if (dominant) reasonParts.push(`mostly ${dominant[0]} files (${dominant[1]}/${analysis.fileCount})`);
-  if (dateLabel) reasonParts.push(`dated around ${dateLabel}`);
-
-  return {
-    name,
-    reason: reasonParts.length ? `Based on ${reasonParts.join(' and ')}.` : "Based on the folder's general content.",
-    mode: 'heuristic',
-  };
+  return suggestNameFromFiles(analysis.names, analysis.categoryCounts, analysis.dateRange);
 }
 
-module.exports = { suggestNameHeuristic, sanitizeName };
+module.exports = { suggestNameHeuristic, suggestNameFromFiles, sanitizeName };

@@ -109,9 +109,12 @@ async function moveFile(sourcePath, destPath) {
  * @param {boolean} options.dryRun - If true, only plan the moves, don't perform them.
  * @param {boolean} options.includeHidden - If true, include dotfiles.
  * @param {(current: number, total: number) => void} [options.onProgress] - Called after each file is processed.
- * @returns {Promise<{moves: Array<{from: string, to: string, category: string}>, skipped: number}>}
+ * @param {(info: {filePath: string, filename: string, category: string}) => string|null|undefined} [options.folderNameOverride] -
+ *   Lets a caller put a file under a different folder name than its raw category (e.g. splitting a
+ *   single-category folder into "Images_Jan_2024", "Images_Feb_2024", ...). Falsy return uses the category.
+ * @returns {Promise<{moves: Array<{from: string, to: string, category: string, folder: string}>, skipped: number}>}
  */
-async function organize({ targetDir, exclude = [], depth = 0, dryRun = false, includeHidden = false, useDefaultExcludes = true, onProgress }) {
+async function organize({ targetDir, exclude = [], depth = 0, dryRun = false, includeHidden = false, useDefaultExcludes = true, onProgress, folderNameOverride }) {
   const excludeNames = new Set();
   const excludePaths = new Set();
 
@@ -144,10 +147,11 @@ async function organize({ targetDir, exclude = [], depth = 0, dryRun = false, in
     const filePath = files[i];
     const filename = path.basename(filePath);
     const category = getCategory(filename);
-    const destDir = path.join(targetDir, category);
+    const folderName = (folderNameOverride && folderNameOverride({ filePath, filename, category })) || category;
+    const destDir = path.join(targetDir, folderName);
     const destPath = await resolveCollision(destDir, filename, claimedPaths);
 
-    moves.push({ from: filePath, to: destPath, category });
+    moves.push({ from: filePath, to: destPath, category, folder: folderName });
 
     if (!dryRun) {
       await moveFile(filePath, destPath);

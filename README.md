@@ -76,6 +76,12 @@ sortify . --stage all --exclude archive --verbose
   (`Images`, `Documents`, ...) and won't re-organize files that are already
   sorted, so it won't create nested `Images/Images` folders.
 - Always try `--dry-run` first on a folder you care about.
+- If a folder turns out to be all one content type (e.g. a folder of nothing
+  but photos), organizing it just produces one folder named after the
+  category — not very descriptive on its own. When that happens, `sortify`
+  prints a **tip** with a more meaningful suggested name (same engine as
+  `sortify suggest`, computed from the files already in hand) and the exact
+  command to apply it, e.g. `sortify suggest ".../Images" --rename`.
 
 ### Project guard
 
