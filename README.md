@@ -33,10 +33,16 @@ sortify
 ```
 
 It'll ask you plain-language questions one at a time — which folder, whether
-to look inside subfolders, anything to skip, and it'll show you exactly what
-it plans to do (nothing is moved yet) before asking you to confirm. Answer
-"n" at any point and nothing changes. This is the recommended way to use
-`sortify` if the flag-based commands below feel like a lot.
+to look inside subfolders (pick with the arrow keys and Enter), anything to
+skip — and it'll show you exactly what it plans to do (nothing is moved yet,
+color-coded by category) before asking you to confirm. Answer "n" or "No" at
+any point and nothing changes. This is the recommended way to use `sortify`
+if the flag-based commands below feel like a lot.
+
+Output is colored (categories, warnings, successes) and a progress bar
+appears automatically for larger batches (10+ files) — both are skipped
+automatically when output isn't a real terminal (piped, redirected to a
+file, etc.), so scripts and logs stay clean.
 
 ## Usage (flags, for scripting or power users)
 
@@ -165,4 +171,7 @@ src/suggest/heuristic.js # Offline name suggestion (no network)
 src/suggest/ai.js        # Anthropic-powered name suggestion (opt-in via API key)
 src/suggest/projectName.js # Reads the declared name from project manifests
 src/suggest/index.js     # Picks AI vs. heuristic, handles fallback
+src/ui/colors.js        # Color palette (kleur), auto-disabled when not a TTY
+src/ui/progress.js      # Progress bar for larger batches
+src/ui/spinner.js       # Indeterminate spinner (scanning, AI network calls)
 ```

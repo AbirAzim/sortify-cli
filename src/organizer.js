@@ -108,9 +108,10 @@ async function moveFile(sourcePath, destPath) {
  * @param {number} options.depth - How many levels deep to look for files (Infinity for unlimited).
  * @param {boolean} options.dryRun - If true, only plan the moves, don't perform them.
  * @param {boolean} options.includeHidden - If true, include dotfiles.
+ * @param {(current: number, total: number) => void} [options.onProgress] - Called after each file is processed.
  * @returns {Promise<{moves: Array<{from: string, to: string, category: string}>, skipped: number}>}
  */
-async function organize({ targetDir, exclude = [], depth = 0, dryRun = false, includeHidden = false, useDefaultExcludes = true }) {
+async function organize({ targetDir, exclude = [], depth = 0, dryRun = false, includeHidden = false, useDefaultExcludes = true, onProgress }) {
   const excludeNames = new Set();
   const excludePaths = new Set();
 
@@ -139,7 +140,8 @@ async function organize({ targetDir, exclude = [], depth = 0, dryRun = false, in
   const moves = [];
   const claimedPaths = new Set();
 
-  for (const filePath of files) {
+  for (let i = 0; i < files.length; i += 1) {
+    const filePath = files[i];
     const filename = path.basename(filePath);
     const category = getCategory(filename);
     const destDir = path.join(targetDir, category);
@@ -150,6 +152,8 @@ async function organize({ targetDir, exclude = [], depth = 0, dryRun = false, in
     if (!dryRun) {
       await moveFile(filePath, destPath);
     }
+
+    if (onProgress) onProgress(i + 1, files.length);
   }
 
   let run = null;

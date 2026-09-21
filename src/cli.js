@@ -3,14 +3,23 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const readline = require('readline');
+const prompts = require('prompts');
 const { Command } = require('commander');
 const { organize } = require('./organizer');
 const { detectProjectMarkers } = require('./guard');
 const { loadHistory: loadRunHistory } = require('./history');
 const { undo } = require('./undo');
 const { suggestName } = require('./suggest');
+const colors = require('./ui/colors');
+const { createProgressBar } = require('./ui/progress');
+const { createSpinner } = require('./ui/spinner');
 const pkg = require('../package.json');
+
+// Exit quietly instead of an ugly stack trace when piped into something
+// that closes early (e.g. `sortify ... | head`).
+process.stdout.on('error', (err) => {
+  if (err.code === 'EPIPE') process.exit(0);
+});
 
 // Lets people type "~/Desktop" at an interactive prompt, where the shell
 // never gets a chance to expand it for them.
@@ -34,118 +43,126 @@ function resolveExistingDir(folder) {
   return targetDir;
 }
 
-function isYes(answer) {
-  return /^y(es)?$/i.test(answer.trim());
+function onCancel() {
+  console.log(colors.warn('\nCancelled — nothing was changed.'));
+  process.exit(0);
 }
 
-/**
- * Wraps readline in a small line queue instead of chained rl.question()
- * calls. Sequential question() calls on a non-TTY stream (piped input, or
- * a user pasting several answers at once) can drop lines that arrive
- * before the next question() attaches its listener — this queues every
- * line as it arrives so nothing is lost regardless of timing.
- */
-function createPrompter() {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
-  const queue = [];
-  const waiters = [];
+// Only shows a bar for batches large enough that it's actually useful —
+// a handful of files finish before a bar would even render meaningfully.
+const PROGRESS_THRESHOLD = 10;
 
-  rl.on('line', (line) => {
-    if (waiters.length > 0) {
-      waiters.shift()(line);
-    } else {
-      queue.push(line);
-    }
-  });
+function makeProgressHandler(label) {
+  let bar = null;
+  return (current, total) => {
+    if (total <= PROGRESS_THRESHOLD) return;
+    if (!bar) bar = createProgressBar(total, label);
+    bar.update(current);
+    if (current === total) bar.stop();
+  };
+}
 
-  rl.on('close', () => {
-    while (waiters.length > 0) {
-      waiters.shift()('');
-    }
-  });
-
-  function ask(promptText) {
-    process.stdout.write(promptText);
-    if (queue.length > 0) {
-      return Promise.resolve(queue.shift());
-    }
-    return new Promise((resolve) => waiters.push(resolve));
+function printMoveSummary(moves, { dryRun }) {
+  const byCategory = new Map();
+  for (const move of moves) {
+    byCategory.set(move.category, (byCategory.get(move.category) || 0) + 1);
   }
-
-  return { ask, close: () => rl.close() };
+  console.log(colors.bold(`${dryRun ? 'Would organize' : 'Organized'} ${moves.length} file(s) into ${byCategory.size} folder(s):`));
+  for (const [category, count] of [...byCategory.entries()].sort()) {
+    console.log(`  ${colors.category(category)}: ${count}`);
+  }
+  return byCategory;
 }
 
 /**
  * A guided, plain-language walkthrough for people who don't want to learn
- * the flags. Triggered when sortify is run with no arguments at all.
+ * the flags. Triggered when sortify is run with no arguments at all. Uses
+ * real arrow-key select / confirm prompts (from the `prompts` package) —
+ * automatable in tests via `prompts.inject()`.
  */
 async function runWizard() {
-  console.log("Hi! Let's organize a folder together — I'll explain each step.\n");
-  const { ask, close } = createPrompter();
+  console.log(colors.heading("Hi! Let's organize a folder together — I'll explain each step.\n"));
 
+  const { folder } = await prompts(
+    {
+      type: 'text',
+      name: 'folder',
+      message: 'Which folder do you want to organize?',
+      initial: process.cwd(),
+    },
+    { onCancel }
+  );
+
+  let targetDir;
   try {
-    const folderAnswer = (await ask(`Which folder do you want to organize?\n(press Enter to use the current folder: ${process.cwd()})\n> `)).trim();
-    const folderInput = folderAnswer || '.';
+    targetDir = resolveExistingDir(folder);
+  } catch (err) {
+    console.log(colors.error(`\nI couldn't find that folder (${err.message}). Nothing was changed.`));
+    return;
+  }
 
-    let targetDir;
-    try {
-      targetDir = resolveExistingDir(folderInput);
-    } catch (err) {
-      console.log(`\nI couldn't find that folder (${err.message}). Nothing was changed.`);
+  console.log(colors.dim(`\nGot it: ${targetDir}\n`));
+
+  const { depth } = await prompts(
+    {
+      type: 'select',
+      name: 'depth',
+      message: 'Should I also look inside subfolders?',
+      choices: [
+        { title: 'No — just the files directly in this folder', value: 0 },
+        { title: 'Yes — one level of subfolders too', value: 1 },
+        { title: 'Yes — dig through everything, no matter how deep', value: Infinity },
+      ],
+      initial: 0,
+    },
+    { onCancel }
+  );
+
+  const { excludeAnswer } = await prompts(
+    {
+      type: 'text',
+      name: 'excludeAnswer',
+      message: "Any folders you'd like me to leave alone? (comma-separated, or leave blank)",
+      initial: '',
+    },
+    { onCancel }
+  );
+  const exclude = excludeAnswer ? excludeAnswer.split(',').map((s) => s.trim()).filter(Boolean) : [];
+
+  const projectMarkers = detectProjectMarkers(targetDir);
+  if (projectMarkers.length > 0) {
+    console.log(colors.warn(`\nHeads up: this looks like a project folder (it has a ${projectMarkers[0]}), not a messy pile of files — organizing it could break it.`));
+    const { proceed } = await prompts({ type: 'confirm', name: 'proceed', message: 'Organize it anyway?', initial: false }, { onCancel });
+    if (!proceed) {
+      console.log(colors.dim('\nOkay, I left it alone. Nothing was changed.'));
       return;
     }
+  }
 
-    console.log(`\nGot it: ${targetDir}\n`);
-    console.log('Should I also look inside its subfolders?');
-    console.log('  1) No, just the files sitting directly in this folder (simplest, default)');
-    console.log('  2) Yes, one level of subfolders too');
-    console.log('  3) Yes, dig through everything, no matter how deep');
-    const depthChoice = (await ask('> ')).trim();
-    const depth = depthChoice === '2' ? 1 : depthChoice === '3' ? Infinity : 0;
+  const scanSpinner = createSpinner('Looking through the folder...');
+  const preview = await organize({ targetDir, exclude, depth, dryRun: true, includeHidden: false, useDefaultExcludes: true });
+  scanSpinner.stop();
 
-    const excludeAnswer = (await ask("\nAny folders you'd like me to leave alone? (type names separated by commas, or just press Enter for none)\n> ")).trim();
-    const exclude = excludeAnswer ? excludeAnswer.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  if (preview.moves.length === 0) {
+    console.log(colors.success("\nI didn't find anything that needs organizing here. All done!"));
+    return;
+  }
 
-    const projectMarkers = detectProjectMarkers(targetDir);
-    if (projectMarkers.length > 0) {
-      console.log(`\nHeads up: this looks like a project folder (it has a ${projectMarkers[0]}), not a messy pile of files — organizing it could break it.`);
-      const proceedAnswer = await ask('Organize it anyway? (y/N)\n> ');
-      if (!isYes(proceedAnswer)) {
-        console.log('\nOkay, I left it alone. Nothing was changed.');
-        return;
-      }
-    }
+  console.log('');
+  printMoveSummary(preview.moves, { dryRun: true });
 
-    console.log('\nOne moment, let me see what would happen...\n');
-    const preview = await organize({ targetDir, exclude, depth, dryRun: true, includeHidden: false, useDefaultExcludes: true });
+  const { confirmed } = await prompts({ type: 'confirm', name: 'confirmed', message: 'Go ahead and organize them now?', initial: false }, { onCancel });
+  if (!confirmed) {
+    console.log(colors.dim('\nNo problem, nothing was changed. Run me again anytime.'));
+    return;
+  }
 
-    if (preview.moves.length === 0) {
-      console.log("I didn't find anything that needs organizing here. All done!");
-      return;
-    }
-
-    const byCategory = new Map();
-    for (const move of preview.moves) {
-      byCategory.set(move.category, (byCategory.get(move.category) || 0) + 1);
-    }
-    console.log(`I can organize ${preview.moves.length} file(s) into ${byCategory.size} folder(s):`);
-    for (const [category, count] of [...byCategory.entries()].sort()) {
-      console.log(`  ${category}: ${count} file(s)`);
-    }
-
-    const confirmAnswer = await ask('\nGo ahead and do it now? (y/N)\n> ');
-    if (!isYes(confirmAnswer)) {
-      console.log('\nNo problem, nothing was changed. Run me again anytime.');
-      return;
-    }
-
-    const result = await organize({ targetDir, exclude, depth, dryRun: false, includeHidden: false, useDefaultExcludes: true });
-    console.log(`\nAll done! I organized ${result.moves.length} file(s).`);
-    if (result.run) {
-      console.log(`If you change your mind, undo it with: sortify undo --run ${result.run.id} "${folderInput}"`);
-    }
-  } finally {
-    close();
+  console.log('');
+  const onProgress = makeProgressHandler('Organizing');
+  const result = await organize({ targetDir, exclude, depth, dryRun: false, includeHidden: false, useDefaultExcludes: true, onProgress });
+  console.log(colors.success(`\nAll done! I organized ${result.moves.length} file(s).`));
+  if (result.run) {
+    console.log(colors.dim(`If you change your mind, undo it with: sortify undo --run ${result.run.id} "${folder}"`));
   }
 }
 
@@ -189,7 +206,7 @@ program
     try {
       targetDir = resolveExistingDir(folder);
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
       return;
     }
@@ -198,23 +215,24 @@ program
     try {
       depth = parseDepth(options.stage ?? options.depth ?? '0');
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
       return;
     }
 
     const projectMarkers = detectProjectMarkers(targetDir);
     if (projectMarkers.length > 0 && !options.force) {
-      console.log(`Skipping: ${targetDir}`);
-      console.log(`This looks like a project folder (found: ${projectMarkers.join(', ')}) — it's already organized on its own terms, not a pile of loose files to sort.`);
+      console.log(colors.warn(`Skipping: ${targetDir}`));
+      console.log(colors.warn(`This looks like a project folder (found: ${projectMarkers.join(', ')}) — it's already organized on its own terms, not a pile of loose files to sort.`));
       console.log('Nothing was changed. Pass --force to organize it anyway, or point sortify at a subfolder instead.');
       return;
     }
 
-    console.log(`${options.dryRun ? '[dry run] ' : ''}Organizing: ${targetDir}`);
-    console.log(`Depth (stage): ${depth === Infinity ? 'all' : depth}${options.exclude.length ? `  |  Excluding: ${options.exclude.join(', ')}` : ''}`);
+    console.log(colors.heading(`${options.dryRun ? '[dry run] ' : ''}Organizing: ${targetDir}`));
+    console.log(colors.dim(`Depth (stage): ${depth === Infinity ? 'all' : depth}${options.exclude.length ? `  |  Excluding: ${options.exclude.join(', ')}` : ''}`));
 
     try {
+      const onProgress = makeProgressHandler(options.dryRun ? 'Scanning' : 'Organizing');
       const { moves, run } = await organize({
         targetDir,
         exclude: options.exclude,
@@ -222,6 +240,7 @@ program
         dryRun: options.dryRun,
         includeHidden: options.includeHidden,
         useDefaultExcludes: options.defaultExclude,
+        onProgress,
       });
 
       if (moves.length === 0) {
@@ -229,27 +248,23 @@ program
         return;
       }
 
-      const byCategory = new Map();
-      for (const move of moves) {
-        byCategory.set(move.category, (byCategory.get(move.category) || 0) + 1);
-        if (options.verbose) {
+      if (options.verbose) {
+        for (const move of moves) {
           const verb = options.dryRun ? 'would move' : 'moved';
-          console.log(`  ${verb}: ${path.relative(targetDir, move.from)} -> ${path.relative(targetDir, move.to)}`);
+          console.log(`  ${verb}: ${colors.dim(path.relative(targetDir, move.from))} -> ${colors.category(move.category)}/${path.basename(move.to)}`);
         }
       }
 
       console.log('');
-      console.log(`${options.dryRun ? 'Would organize' : 'Organized'} ${moves.length} file(s) into ${byCategory.size} folder(s):`);
-      for (const [category, count] of [...byCategory.entries()].sort()) {
-        console.log(`  ${category}: ${count}`);
-      }
+      printMoveSummary(moves, { dryRun: options.dryRun });
       if (options.dryRun) {
-        console.log('\nRun again without --dry-run to apply these changes.');
+        console.log(colors.dim('\nRun again without --dry-run to apply these changes.'));
       } else if (run) {
-        console.log(`\nRecorded as run #${run.id}. Undo with: sortify undo --run ${run.id} "${folder}"`);
+        console.log(colors.success(`\nOrganized ${moves.length} file(s).`));
+        console.log(colors.dim(`Recorded as run #${run.id}. Undo with: sortify undo --run ${run.id} "${folder}"`));
       }
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
     }
   });
@@ -265,7 +280,7 @@ program
     try {
       targetDir = resolveExistingDir(folder);
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
       return;
     }
@@ -289,20 +304,20 @@ program
       }
 
       for (const entry of report) {
-        console.log(`${options.dryRun ? '[dry run] ' : ''}Run #${entry.id} (${entry.timestamp}):`);
+        console.log(colors.heading(`${options.dryRun ? '[dry run] ' : ''}Run #${entry.id} (${entry.timestamp}):`));
         for (const move of entry.restored) {
-          console.log(`  ${options.dryRun ? 'would restore' : 'restored'}: ${path.relative(targetDir, move.to)} -> ${path.relative(targetDir, move.from)}`);
+          console.log(`  ${colors.success(options.dryRun ? 'would restore' : 'restored')}: ${path.relative(targetDir, move.to)} -> ${path.relative(targetDir, move.from)}`);
         }
         for (const move of entry.skipped) {
-          console.log(`  skipped: ${path.relative(targetDir, move.to)} (${move.reason})`);
+          console.log(`  ${colors.warn('skipped')}: ${path.relative(targetDir, move.to)} (${move.reason})`);
         }
-        console.log(`  ${entry.restored.length} restored, ${entry.skipped.length} skipped.`);
+        console.log(colors.dim(`  ${entry.restored.length} restored, ${entry.skipped.length} skipped.`));
       }
       if (options.dryRun) {
-        console.log('\nRun again without --dry-run to apply this undo.');
+        console.log(colors.dim('\nRun again without --dry-run to apply this undo.'));
       }
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
     }
   });
@@ -315,7 +330,7 @@ program
     try {
       targetDir = resolveExistingDir(folder);
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
       return;
     }
@@ -327,7 +342,7 @@ program
     }
 
     for (const run of history) {
-      const status = run.undone ? `undone at ${run.undoneAt}` : 'active';
+      const status = run.undone ? colors.dim(`undone at ${run.undoneAt}`) : colors.success('active');
       console.log(`#${run.id}  ${run.timestamp}  ${run.moves.length} file(s)  depth=${run.depth}  [${status}]`);
     }
   });
@@ -345,7 +360,7 @@ program
     try {
       targetDir = resolveExistingDir(folder);
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
       return;
     }
@@ -354,16 +369,19 @@ program
     try {
       depth = parseDepth(options.depth);
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
       return;
     }
 
     let suggestion;
+    const thinkingSpinner = createSpinner('Thinking of a good name...');
     try {
       suggestion = await suggestName(targetDir, { depth, apiKey: options.apiKey, offline: options.offline });
+      thinkingSpinner.stop();
     } catch (err) {
-      console.error(`Error: ${err.message}`);
+      thinkingSpinner.stop();
+      console.error(colors.error(`Error: ${err.message}`));
       process.exitCode = 1;
       return;
     }
@@ -373,9 +391,9 @@ program
       return;
     }
 
-    console.log(`Suggested name (${suggestion.mode}): ${suggestion.name}`);
-    console.log(suggestion.reason);
-    if (suggestion.warning) console.log(`Note: ${suggestion.warning}`);
+    console.log(colors.bold(`Suggested name (${suggestion.mode}): `) + colors.success(suggestion.name));
+    console.log(colors.dim(suggestion.reason));
+    if (suggestion.warning) console.log(colors.warn(`Note: ${suggestion.warning}`));
 
     if (!options.rename) {
       return;
@@ -383,7 +401,7 @@ program
 
     const projectMarkers = detectProjectMarkers(targetDir);
     if (projectMarkers.length > 0) {
-      console.log(`\nRefusing to rename: this looks like a project folder (found: ${projectMarkers.join(', ')}).`);
+      console.log(colors.warn(`\nRefusing to rename: this looks like a project folder (found: ${projectMarkers.join(', ')}).`));
       return;
     }
 
@@ -396,17 +414,18 @@ program
     }
 
     if (!options.yes) {
-      const { ask, close } = createPrompter();
-      const answer = await ask(`\nRename "${targetDir}" to "${destPath}"? [y/N] `);
-      close();
-      if (!isYes(answer)) {
+      const { confirmed } = await prompts(
+        { type: 'confirm', name: 'confirmed', message: `Rename "${path.basename(targetDir)}" to "${path.basename(destPath)}"?`, initial: false },
+        { onCancel }
+      );
+      if (!confirmed) {
         console.log('Rename cancelled.');
         return;
       }
     }
 
     fs.renameSync(targetDir, destPath);
-    console.log(`Renamed to: ${destPath}`);
+    console.log(colors.success(`Renamed to: ${destPath}`));
   });
 
 if (process.argv.slice(2).length === 0) {
