@@ -3,14 +3,26 @@
 const { analyzeFolder } = require('./analyze');
 const { readProjectName } = require('./projectName');
 
+// Windows won't create a folder with one of these names (case-insensitive),
+// with or without an extension — reserved for legacy device names.
+const WINDOWS_RESERVED_NAMES = new Set([
+  'con', 'prn', 'aux', 'nul',
+  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
+]);
+
 function sanitizeName(name) {
   const cleaned = name
-    .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/[\\/:*?"<>|]/g, '') // Windows-reserved path characters
     .trim()
     .replace(/\s+/g, ' ')
     .replace(/ /g, '_')
+    .replace(/[.\s]+$/, '') // Windows disallows a trailing dot or space
     .slice(0, 80);
-  return cleaned || 'Untitled_Folder';
+
+  if (!cleaned) return 'Untitled_Folder';
+  if (WINDOWS_RESERVED_NAMES.has(cleaned.toLowerCase())) return `${cleaned}_folder`;
+  return cleaned;
 }
 
 function toTitleCase(word) {

@@ -1,16 +1,21 @@
 'use strict';
 
 const colors = require('./colors');
+const { supportsUnicode } = require('./terminal');
 
-const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const UNICODE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const ASCII_FRAMES = ['|', '/', '-', '\\'];
 
 /**
  * Indeterminate spinner for waiting on something without a known duration
  * (network calls, scanning a large tree). Falls back to a single plain
- * line — no animation — when stdout isn't a real terminal.
+ * line — no animation — when stdout isn't a real terminal, and to plain
+ * ASCII frames on a classic Windows console that may not render Braille
+ * spinner characters.
  */
 function createSpinner(label) {
   const isTTY = Boolean(process.stdout.isTTY);
+  const FRAMES = supportsUnicode() ? UNICODE_FRAMES : ASCII_FRAMES;
 
   if (!isTTY) {
     console.log(label);

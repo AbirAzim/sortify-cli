@@ -23,11 +23,11 @@ process.stdout.on('error', (err) => {
   if (err.code === 'EPIPE') process.exit(0);
 });
 
-// Lets people type "~/Desktop" at an interactive prompt, where the shell
-// never gets a chance to expand it for them.
+// Lets people type "~/Desktop" (or "~\Desktop" on Windows) at an interactive
+// prompt, where the shell never gets a chance to expand it for them.
 function expandHome(p) {
   if (p === '~') return os.homedir();
-  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2));
   return p;
 }
 
