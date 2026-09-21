@@ -74,10 +74,19 @@ Keep plain, and Exit.
 
 - **Combine** — everything into one folder with a name inferred from a
   shared filename pattern (skipping generic ones like `IMG`/`DSC`/`Screenshot`)
-  or the date range, e.g. `Invoice_2024` or `Vacation_Aug_2024`.
+  or the date range, e.g. `Invoice_2024` or `Vacation_Aug_2024`. Before
+  applying it, `sortify` shows exactly what's being grouped — file count,
+  extension(s), a few sample filenames, and the reasoning — then lets you
+  accept that name (just press Enter) or type your own instead:
+  ```
+    Grouping: all 19 file(s) (.jpg) — e.g. IMG_0001.jpg, IMG_0002.jpg, ... (Based on mostly Images files (19/19) and dated around Mar_2024.)
+  ? Folder name (edit it, or press Enter to accept): › Images_Mar_2024
+  ```
 - **Split by filename pattern** — clusters files by a shared naming stem,
   e.g. `invoice_01.pdf`, `invoice_02.pdf` → `Invoice/`, alongside
-  `receipt_01.pdf`, `receipt_02.pdf` → `Receipt/`.
+  `receipt_01.pdf`, `receipt_02.pdf` → `Receipt/`. Same as Combine, each
+  detected group is shown (its own file count and sample names) before you
+  accept or rename it — one prompt per group.
 - **Split by month / by year** — groups by file modification date at
   whichever granularity you pick, e.g. `Images_Jan_2024`, `Images_Feb_2024`,
   or just `Images_2024`, `Images_2025`.

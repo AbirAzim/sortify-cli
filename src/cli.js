@@ -11,7 +11,7 @@ const { loadHistory: loadRunHistory, HISTORY_DIR_NAME } = require('./history');
 const { DEFAULT_EXCLUDE_DIRS, isKnownCategoryFolder } = require('./categorize');
 const { undo } = require('./undo');
 const { suggestName } = require('./suggest');
-const { suggestNameFromFiles, toTitleCase, extractStem, groupByFilenamePattern } = require('./suggest/heuristic');
+const { suggestNameFromFiles, sanitizeName, toTitleCase, extractStem, groupByFilenamePattern } = require('./suggest/heuristic');
 const colors = require('./ui/colors');
 const { createProgressBar } = require('./ui/progress');
 const { createSpinner } = require('./ui/spinner');
@@ -156,6 +156,35 @@ function dateOf(filePath) {
 }
 
 /**
+ * Describes what's actually in a group of files — file type(s), count,
+ * and (if there's room) a couple of sample filenames — so the user has
+ * something concrete to judge a suggested name against before accepting
+ * or replacing it.
+ */
+function describeFileGroup(names) {
+  const extensions = [...new Set(names.map((n) => path.extname(n).slice(1).toLowerCase()).filter(Boolean))];
+  const extLabel = extensions.length ? ` (${extensions.map((e) => `.${e}`).join(', ')})` : '';
+  const sample = names.slice(0, 3).join(', ') + (names.length > 3 ? ', ...' : '');
+  return `${names.length} file(s)${extLabel} — e.g. ${sample}`;
+}
+
+/**
+ * Shows what's being grouped, then a text prompt pre-filled with the
+ * suggested name — Enter accepts it as-is, or the user can edit/replace it
+ * entirely before submitting. This is the one spot every generated folder
+ * name passes through, so nothing gets applied without the user seeing it
+ * first.
+ */
+async function confirmOrEditName(defaultName, groupDescription) {
+  console.log(colors.dim(`\n  Grouping: ${groupDescription}`));
+  const { name } = await prompts(
+    { type: 'text', name: 'name', message: 'Folder name (edit it, or press Enter to accept):', initial: defaultName },
+    { onCancel }
+  );
+  return sanitizeName((name || '').trim() || defaultName);
+}
+
+/**
  * Asks — with a real select prompt — how a homogeneous batch of files
  * should be organized: combined into one meaningfully-named folder, split
  * several different ways (by filename pattern, by month/year, by file
@@ -207,20 +236,40 @@ async function promptHomogeneousChoice(organizeOptions, moves, { dryRun }) {
     return { folderNameOverride: undefined, moves, cancelled: true };
   }
 
+  const names = moves.map((m) => path.basename(m.from));
+
   let folderNameOverride;
   if (howToOrganize === 'combine') {
-    folderNameOverride = () => suggestion.name;
+    const finalName = await confirmOrEditName(suggestion.name, `all ${describeFileGroup(names)} (${suggestion.reason})`);
+    folderNameOverride = () => finalName;
   } else if (howToOrganize === 'split-month') {
+    console.log(colors.dim(`\n  Grouping: ${describeFileGroup(names)}, split into folders by month.`));
     folderNameOverride = ({ filePath, category: cat }) => `${cat}_${monthLabel(dateOf(filePath))}`;
   } else if (howToOrganize === 'split-year') {
+    console.log(colors.dim(`\n  Grouping: ${describeFileGroup(names)}, split into folders by year.`));
     folderNameOverride = ({ filePath, category: cat }) => `${cat}_${dateOf(filePath).getFullYear()}`;
   } else if (howToOrganize === 'split-pattern') {
-    const qualifyingStems = new Set(patternGroups.keys());
+    const stemToNames = new Map();
+    for (const name of names) {
+      const stem = extractStem(name);
+      if (patternGroups.has(stem)) {
+        if (!stemToNames.has(stem)) stemToNames.set(stem, []);
+        stemToNames.get(stem).push(name);
+      }
+    }
+
+    const stemNameMap = new Map();
+    for (const [stem, stemNames] of stemToNames) {
+      const finalName = await confirmOrEditName(toTitleCase(stem), describeFileGroup(stemNames));
+      stemNameMap.set(stem, finalName);
+    }
+
     folderNameOverride = ({ filename, category: cat }) => {
       const stem = extractStem(filename);
-      return qualifyingStems.has(stem) ? toTitleCase(stem) : `${cat}_Other`;
+      return stemNameMap.has(stem) ? stemNameMap.get(stem) : `${cat}_Other`;
     };
   } else if (howToOrganize === 'split-ext') {
+    console.log(colors.dim(`\n  Grouping: ${describeFileGroup(names)}, split into folders by file type.`));
     folderNameOverride = ({ filename, category: cat }) => {
       const ext = path.extname(filename).slice(1).toLowerCase();
       return ext ? `${cat}_${ext}` : cat;
