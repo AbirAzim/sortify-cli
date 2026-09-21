@@ -3,7 +3,6 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { loadHistory, saveHistory } = require('./history');
-const { CATEGORY_MAP, DEFAULT_CATEGORY } = require('./categorize');
 
 async function pathExists(p) {
   try {
@@ -28,11 +27,16 @@ async function moveBack(from, to) {
   }
 }
 
-// Best-effort tidy-up: removes category folders sortify created if undoing
-// left them empty. Never touches a folder that still has something in it.
-async function removeEmptyCategoryDirs(targetDir) {
-  const names = [...Object.keys(CATEGORY_MAP), DEFAULT_CATEGORY];
-  for (const name of names) {
+// Best-effort tidy-up: removes the folders these specific moves were sorted
+// into, if undoing left them empty. Uses `move.folder` (the actual
+// destination folder name — may differ from the raw category when a run
+// used the combine/split naming) rather than a static category list, so
+// it also cleans up folders like "Images_Jan_2024" or "Holiday_2024".
+// Falls back to `move.category` for older history entries recorded before
+// `folder` existed. Never touches a folder that still has something in it.
+async function removeEmptyFolders(targetDir, moves) {
+  const folderNames = new Set(moves.map((m) => m.folder || m.category));
+  for (const name of folderNames) {
     const dirPath = path.join(targetDir, name);
     try {
       const entries = await fs.readdir(dirPath);
@@ -74,6 +78,7 @@ async function undo({ targetDir, runId, all = false, dryRun = false }) {
   const runs = selectRuns(history, { runId, all });
 
   const report = [];
+  const touchedMoves = [];
 
   for (const run of runs) {
     const restored = [];
@@ -102,12 +107,13 @@ async function undo({ targetDir, runId, all = false, dryRun = false }) {
       run.undoneAt = new Date().toISOString();
     }
 
+    touchedMoves.push(...run.moves);
     report.push({ id: run.id, timestamp: run.timestamp, restored, skipped });
   }
 
   if (!dryRun && runs.length > 0) {
     await saveHistory(targetDir, history);
-    await removeEmptyCategoryDirs(targetDir);
+    await removeEmptyFolders(targetDir, touchedMoves);
   }
 
   return report;
