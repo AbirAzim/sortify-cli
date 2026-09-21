@@ -1,17 +1,43 @@
 {
   "name": "sortify-cli",
   "version": "1.0.0",
-  "description": "Organize the files in a folder into meaningfully named subfolders by content type (Images, Documents, Videos, ...), with support for excluding folders and controlling recursion depth.",
+  "description": "Organize the files in a folder into meaningfully named subfolders by content type (Images, Documents, Videos, ...), with an interactive wizard, undo, and AI-optional smart naming.",
   "bin": {
-    "sortify": "./bin/sortify.js"
+    "sortify": "bin/sortify.js"
   },
   "main": "src/organizer.js",
   "type": "commonjs",
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node bin/sortify.js"
   },
-  "keywords": ["cli", "file-organizer", "declutter", "sort-files"],
+  "keywords": [
+    "cli",
+    "file-organizer",
+    "file-management",
+    "declutter",
+    "sort-files",
+    "downloads-folder",
+    "productivity"
+  ],
+  "author": "Abir Azim",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbirAzim/sortify-cli.git"
+  },
+  "homepage": "https://github.com/AbirAzim/sortify-cli#readme",
+  "bugs": {
+    "url": "https://github.com/AbirAzim/sortify-cli/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.60.0",
     "commander": "^12.1.0",

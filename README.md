@@ -14,22 +14,56 @@ console that doesn't render Unicode well (Windows Terminal renders it fine).
 
 ## Install
 
-```bash
-npm install
-```
+You don't need to clone this repository to use `sortify` — it's published on
+npm. Pick whichever of these you're comfortable with:
 
-Run it directly with Node:
+### Option A: Try it instantly, nothing installed (recommended if you're new to this)
 
-```bash
-node bin/sortify.js <folder> [options]
-```
-
-Or link it globally so `sortify` is available anywhere:
+Requires [Node.js](https://nodejs.org) (which includes `npx`) — nothing else.
 
 ```bash
-npm link
-sortify <folder> [options]
+npx sortify-cli ~/Downloads --dry-run
 ```
+
+`npx` downloads and runs it on the spot, once, without installing anything
+permanently on your machine. Great for a one-off cleanup or for trying it out.
+
+### Option B: Install it once, use the short `sortify` command everywhere
+
+```bash
+npm install -g sortify-cli
+sortify ~/Downloads --dry-run
+```
+
+This is the one to pick if you'll use it regularly — after this, just typing
+`sortify` works in any terminal, any folder, from now on.
+
+### Option C: Get the source code (for contributing or modifying it)
+
+If you want to read, change, or contribute to the code rather than just run
+it, you do need a local copy. Two ways to get one, whether or not you know
+Git:
+
+**Without Git** — on the [GitHub page](https://github.com/AbirAzim/sortify-cli),
+click the green **Code** button → **Download ZIP**, then unzip it and open a
+terminal inside that folder.
+
+**With Git:**
+```bash
+git clone https://github.com/AbirAzim/sortify-cli.git
+cd sortify-cli
+```
+
+Then, either way, from inside that folder:
+
+```bash
+npm install       # downloads its dependencies
+npm link          # makes the `sortify` command available everywhere
+sortify --version # confirms it worked
+```
+
+(Or skip `npm link` and just run `node bin/sortify.js <folder> [options]`
+directly from inside the folder instead.)
 
 ## Easiest way to use it: just run `sortify`
 
