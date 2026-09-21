@@ -7,7 +7,8 @@ const prompts = require('prompts');
 const { Command } = require('commander');
 const { organize } = require('./organizer');
 const { detectProjectMarkers } = require('./guard');
-const { loadHistory: loadRunHistory } = require('./history');
+const { loadHistory: loadRunHistory, HISTORY_DIR_NAME } = require('./history');
+const { DEFAULT_EXCLUDE_DIRS, isKnownCategoryFolder } = require('./categorize');
 const { undo } = require('./undo');
 const { suggestName } = require('./suggest');
 const { suggestNameFromFiles, toTitleCase, extractStem, groupByFilenamePattern } = require('./suggest/heuristic');
@@ -238,6 +239,102 @@ async function promptHomogeneousChoice(organizeOptions, moves, { dryRun }) {
 }
 
 /**
+ * Lists the subfolders directly inside `parentDir` that a depth-0 run never
+ * looked inside — i.e. everything except folders this run just created/used
+ * (`justUsedFolderNames`), sortify's own metadata folder, any known category
+ * folder name (already "organized" by definition), hidden folders (unless
+ * --include-hidden), and anything covered by --exclude / the default excludes.
+ */
+async function listLeftoverSubfolders(parentDir, justUsedFolderNames, organizeOptions) {
+  const entries = await fs.promises.readdir(parentDir, { withFileTypes: true });
+  const excludeNames = new Set(organizeOptions.exclude.map((e) => e.toLowerCase()));
+  const defaultExcludeNames = organizeOptions.useDefaultExcludes ? new Set(DEFAULT_EXCLUDE_DIRS.map((n) => n.toLowerCase())) : new Set();
+
+  return entries
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .filter((name) => {
+      if (name === HISTORY_DIR_NAME) return false;
+      if (!organizeOptions.includeHidden && name.startsWith('.')) return false;
+      if (justUsedFolderNames.has(name)) return false;
+      if (isKnownCategoryFolder(name)) return false;
+      if (excludeNames.has(name.toLowerCase())) return false;
+      if (defaultExcludeNames.has(name.toLowerCase())) return false;
+      return true;
+    })
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * After a depth-0 run finishes, walks any subfolders it never looked
+ * inside and asks — one at a time, Yes / No / Exit — whether to organize
+ * each one too. "Yes" runs the exact same flow on that subfolder (project
+ * guard, scan, the combine/split/plain/exit question if it's homogeneous,
+ * then the real move) and then recurses into *its* leftover subfolders.
+ * "No" skips just that folder and moves to the next sibling. "Exit" stops
+ * the whole walk immediately — no more folders are asked about.
+ */
+async function offerToOrganizeSubfolders(parentDir, organizeOptions, justUsedFolderNames) {
+  const leftovers = await listLeftoverSubfolders(parentDir, justUsedFolderNames, organizeOptions);
+
+  for (const name of leftovers) {
+    const subDir = path.join(parentDir, name);
+
+    const { action } = await prompts(
+      {
+        type: 'select',
+        name: 'action',
+        message: `Also organize the folder "${name}"?`,
+        choices: [
+          { title: 'Yes', value: 'yes' },
+          { title: 'No, skip it', value: 'no' },
+          { title: 'Exit — stop asking about folders', value: 'exit' },
+        ],
+        initial: 0,
+      },
+      { onCancel }
+    );
+
+    if (action === 'exit') return;
+    if (action === 'no') continue;
+
+    const subProjectMarkers = detectProjectMarkers(subDir);
+    if (subProjectMarkers.length > 0) {
+      console.log(colors.warn(`\nSkipping "${name}": looks like a project folder (found: ${subProjectMarkers.join(', ')}).`));
+      continue;
+    }
+
+    const subOrganizeOptions = { ...organizeOptions, targetDir: subDir, depth: 0 };
+    const scan = await organize({ ...subOrganizeOptions, dryRun: true });
+
+    if (scan.moves.length === 0) {
+      console.log(colors.dim(`\n"${name}" has nothing to organize.`));
+      continue;
+    }
+
+    console.log('');
+    printMoveSummary(scan.moves, { dryRun: true });
+
+    const choice = await promptHomogeneousChoice(subOrganizeOptions, scan.moves, { dryRun: true });
+    if (choice.cancelled) {
+      console.log(colors.dim(`\nSkipped "${name}".`));
+      continue;
+    }
+
+    const onProgress = makeProgressHandler('Organizing');
+    const result = await organize({ ...subOrganizeOptions, dryRun: false, onProgress, folderNameOverride: choice.folderNameOverride });
+
+    console.log(colors.success(`\nOrganized ${result.moves.length} file(s) in "${name}".`));
+    if (result.run) {
+      console.log(colors.dim(`Undo with: sortify undo --run ${result.run.id} "${subDir}"`));
+    }
+
+    const touchedInSub = new Set(result.moves.map((m) => m.folder));
+    await offerToOrganizeSubfolders(subDir, subOrganizeOptions, touchedInSub);
+  }
+}
+
+/**
  * A guided, plain-language walkthrough for people who don't want to learn
  * the flags. Triggered when sortify is run with no arguments at all. Uses
  * real arrow-key select / confirm prompts (from the `prompts` package) —
@@ -334,6 +431,11 @@ async function runWizard() {
   console.log(colors.success(`\nAll done! I organized ${result.moves.length} file(s).`));
   if (result.run) {
     console.log(colors.dim(`If you change your mind, undo it with: sortify undo --run ${result.run.id} "${folder}"`));
+  }
+
+  if (depth === 0) {
+    const touchedFolderNames = new Set(result.moves.map((m) => m.folder));
+    await offerToOrganizeSubfolders(targetDir, organizeOptions, touchedFolderNames);
   }
 }
 
@@ -466,6 +568,11 @@ program
       console.log(colors.success(`\nOrganized ${result.moves.length} file(s).`));
       if (result.run) {
         console.log(colors.dim(`Recorded as run #${result.run.id}. Undo with: sortify undo --run ${result.run.id} "${folder}"`));
+      }
+
+      if (isInteractive && depth === 0) {
+        const touchedFolderNames = new Set(result.moves.map((m) => m.folder));
+        await offerToOrganizeSubfolders(targetDir, organizeOptions, touchedFolderNames);
       }
     } catch (err) {
       console.error(colors.error(`Error: ${err.message}`));

@@ -91,6 +91,34 @@ Keep plain, and Exit.
 Whichever you pick, it re-shows the plan before anything is actually moved,
 and `sortify undo` reverses it exactly the same way regardless of choice.
 
+### Also organize the leftover subfolders (depth 0 only)
+
+With the default depth (`0`), `sortify` only ever looks at files sitting
+directly in the target folder — any subfolders are left completely alone.
+At a real terminal, once it finishes, it now asks about those subfolders
+too, one at a time:
+
+```
+Also organize the folder "vacation"? › Yes / No, skip it / Exit — stop asking about folders
+```
+
+- **Yes** — runs the exact same flow on that subfolder (project-guard check,
+  scan, the combine/split/plain/exit question if it turns out homogeneous,
+  then the real move) and prints its own summary and undo command. It then
+  asks about *that* subfolder's own leftover subfolders too, and so on —
+  you can walk an entire tree this way, one folder at a time.
+- **No, skip it** — leaves that one folder untouched and moves on to the
+  next sibling folder.
+- **Exit** — stops the whole walk immediately; nothing further is asked
+  about, and no additional folders are touched. (Ctrl+C works the same way.)
+
+This only happens for real (non-`--dry-run`) runs at depth `0`, at a real
+terminal, and never with `--yes` or in a script — so automation is
+never blocked waiting on input. It skips `.sortify`, any folder covered by
+`--exclude` or the default excludes, hidden folders (unless
+`--include-hidden`), and folders already named after a known category
+(e.g. a pre-existing `Images` folder).
+
 ## Usage (flags, for scripting or power users)
 
 ```bash
