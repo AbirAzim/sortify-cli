@@ -50,6 +50,14 @@ function onCancel() {
   process.exit(0);
 }
 
+// Select/confirm prompts always show an explicit choice for backing out —
+// but a free-text prompt (e.g. "which folder?") has no menu to put one in,
+// so typing "exit"/"quit" there needs to work as an escape hatch too, on
+// top of Ctrl+C (which prompts already handles via onCancel above).
+function isExitAnswer(text) {
+  return ['exit', 'quit', 'q'].includes(String(text || '').trim().toLowerCase());
+}
+
 // Only shows a bar for batches large enough that it's actually useful —
 // a handful of files finish before a bar would even render meaningfully.
 const PROGRESS_THRESHOLD = 10;
@@ -390,7 +398,8 @@ async function offerToOrganizeSubfolders(parentDir, organizeOptions, justUsedFol
  * automatable in tests via `prompts.inject()`.
  */
 async function runWizard() {
-  console.log(colors.heading("Hi! Let's organize a folder together — I'll explain each step.\n"));
+  console.log(colors.heading("Hi! Let's organize a folder together — I'll explain each step."));
+  console.log(colors.dim('(Type "exit" or press Ctrl+C anytime to stop without changing anything.)\n'));
 
   const { folder } = await prompts(
     {
@@ -401,6 +410,11 @@ async function runWizard() {
     },
     { onCancel }
   );
+
+  if (isExitAnswer(folder)) {
+    console.log(colors.dim('\nOkay, nothing was changed.'));
+    return;
+  }
 
   let targetDir;
   try {
@@ -431,11 +445,15 @@ async function runWizard() {
     {
       type: 'text',
       name: 'excludeAnswer',
-      message: "Any folders you'd like me to leave alone? (comma-separated, or leave blank)",
+      message: "Any folders you'd like me to leave alone? (comma-separated, or leave blank; type \"exit\" to stop)",
       initial: '',
     },
     { onCancel }
   );
+  if (isExitAnswer(excludeAnswer)) {
+    console.log(colors.dim('\nOkay, nothing was changed.'));
+    return;
+  }
   const exclude = excludeAnswer ? excludeAnswer.split(',').map((s) => s.trim()).filter(Boolean) : [];
 
   const projectMarkers = detectProjectMarkers(targetDir);

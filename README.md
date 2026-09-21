@@ -39,6 +39,12 @@ color-coded by category) before asking you to confirm. Answer "n" or "No" at
 any point and nothing changes. This is the recommended way to use `sortify`
 if the flag-based commands below feel like a lot.
 
+You can back out at any point: at a menu (arrow-key list), there's always an
+explicit "No"/"Exit" choice; at a typed question (like "which folder?"),
+type `exit` (or `quit`); and Ctrl+C works everywhere, no matter what's being
+asked. Nothing is ever changed until you reach the final "go ahead?"
+confirmation and say yes.
+
 Output is colored (categories, warnings, successes) and a progress bar
 appears automatically for larger batches (10+ files) — both are skipped
 automatically when output isn't a real terminal (piped, redirected to a
