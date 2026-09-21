@@ -85,14 +85,50 @@ and nothing new has since taken its original spot — otherwise it's reported
 as **skipped** rather than overwritten. Category folders (`Images`,
 `Documents`, ...) are removed automatically once undoing empties them out.
 
+## Suggest a folder name
+
+`sortify suggest` looks at a folder's contents and proposes a meaningful
+name for it — useful for that `New Folder` or `Downloads` pile you've just
+organized.
+
+```bash
+sortify suggest ~/Downloads/New_Folder
+sortify suggest ~/Downloads/New_Folder --rename          # apply it (asks to confirm)
+sortify suggest ~/Downloads/New_Folder --rename --yes    # apply it, no prompt
+```
+
+Two modes, always available in that order:
+
+1. **Offline heuristic (always works, no network)** — the default. Prefers a
+   declared project name (reads `name` from `package.json`, `Cargo.toml`,
+   `pyproject.toml`, `go.mod`, `composer.json`, or the first heading in
+   `README.md`); otherwise looks at a shared filename pattern (e.g.
+   `invoice_2024_01.pdf`, `invoice_2024_02.pdf` → `Invoice`) or the dominant
+   file category, plus a date range from file modification times.
+2. **AI-powered (opt-in via API key)** — if an Anthropic API key is
+   available (`--api-key <key>`, or the `ANTHROPIC_API_KEY` environment
+   variable) and `--offline` isn't passed, `sortify` sends the file *names*
+   and category breakdown (never file contents) to Claude for a more natural
+   suggestion. Any failure — no key, bad key, no network, rate limit — falls
+   back to the offline heuristic automatically, with a note explaining why.
+
+`--rename` refuses to touch a folder the project guard would also protect
+(`package.json`, `.git`, etc.), and resolves name collisions the same way as
+organizing (`Name (1)`, `Name (2)`, ...).
+
 ## Project layout
 
 ```
-bin/sortify.js       # CLI entry point (shebang)
-src/cli.js           # Argument parsing (commander), organize/undo/history commands
-src/organizer.js     # Directory walking, collision handling, file moves
-src/categorize.js    # Extension -> category mapping, default excludes
-src/guard.js         # Project-marker detection (package.json, .git, ...)
-src/history.js       # Append-only JSON run log (.sortify/history.json)
-src/undo.js          # Reverses recorded runs
+bin/sortify.js         # CLI entry point (shebang)
+src/cli.js              # Argument parsing (commander), organize/undo/history/suggest commands
+src/organizer.js        # Directory walking, collision handling, file moves
+src/categorize.js       # Extension -> category mapping, default excludes
+src/guard.js            # Project-marker detection (package.json, .git, ...)
+src/history.js          # Append-only JSON run log (.sortify/history.json)
+src/undo.js             # Reverses recorded runs
+src/suggest/analyze.js  # Local content signals: categories, filenames, mtimes, markers
+src/suggest/heuristic.js # Offline name suggestion (no network)
+src/suggest/ai.js        # Anthropic-powered name suggestion (opt-in via API key)
+src/suggest/projectName.js # Reads the declared name from project manifests
+src/suggest/index.js     # Picks AI vs. heuristic, handles fallback
 ```

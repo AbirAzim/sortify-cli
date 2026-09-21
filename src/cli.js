@@ -7,6 +7,7 @@ const { organize } = require('./organizer');
 const { detectProjectMarkers } = require('./guard');
 const { loadHistory: loadRunHistory } = require('./history');
 const { undo } = require('./undo');
+const { suggestName } = require('./suggest');
 const pkg = require('../package.json');
 
 function resolveExistingDir(folder) {
@@ -201,6 +202,84 @@ program
       const status = run.undone ? `undone at ${run.undoneAt}` : 'active';
       console.log(`#${run.id}  ${run.timestamp}  ${run.moves.length} file(s)  depth=${run.depth}  [${status}]`);
     }
+  });
+
+program
+  .command('suggest [folder]')
+  .description('Suggest a meaningful name for <folder> based on its contents (default: current directory)')
+  .option('-d, --depth <n>', "How many subfolder levels deep to look at. Use 'all' for unlimited.", '1')
+  .option('--api-key <key>', 'Anthropic API key for AI-powered suggestions (defaults to the ANTHROPIC_API_KEY env var)')
+  .option('--offline', 'Skip AI and use the offline heuristic only, even if an API key is available', false)
+  .option('--rename', 'Rename the folder to the suggested name', false)
+  .option('--yes', 'Skip the rename confirmation prompt', false)
+  .action(async (folder = '.', options) => {
+    let targetDir;
+    try {
+      targetDir = resolveExistingDir(folder);
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    let depth;
+    try {
+      depth = parseDepth(options.depth);
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    let suggestion;
+    try {
+      suggestion = await suggestName(targetDir, { depth, apiKey: options.apiKey, offline: options.offline });
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (!suggestion.name) {
+      console.log(suggestion.reason);
+      return;
+    }
+
+    console.log(`Suggested name (${suggestion.mode}): ${suggestion.name}`);
+    console.log(suggestion.reason);
+    if (suggestion.warning) console.log(`Note: ${suggestion.warning}`);
+
+    if (!options.rename) {
+      return;
+    }
+
+    const projectMarkers = detectProjectMarkers(targetDir);
+    if (projectMarkers.length > 0) {
+      console.log(`\nRefusing to rename: this looks like a project folder (found: ${projectMarkers.join(', ')}).`);
+      return;
+    }
+
+    const parentDir = path.dirname(targetDir);
+    let destPath = path.join(parentDir, suggestion.name);
+    let counter = 1;
+    while (fs.existsSync(destPath)) {
+      destPath = path.join(parentDir, `${suggestion.name} (${counter})`);
+      counter += 1;
+    }
+
+    if (!options.yes) {
+      const readline = require('readline');
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise((resolve) => rl.question(`\nRename "${targetDir}" to "${destPath}"? [y/N] `, resolve));
+      rl.close();
+      if (!/^y(es)?$/i.test(answer.trim())) {
+        console.log('Rename cancelled.');
+        return;
+      }
+    }
+
+    fs.renameSync(targetDir, destPath);
+    console.log(`Renamed to: ${destPath}`);
   });
 
 program.parse();
