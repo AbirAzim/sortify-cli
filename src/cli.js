@@ -729,7 +729,11 @@ program
   .command('suggest [folder]')
   .description('Suggest a meaningful name for <folder> based on its contents (default: current directory)')
   .option('-d, --depth <n>', "How many subfolder levels deep to look at. Use 'all' for unlimited.", '1')
-  .option('--api-key <key>', 'Anthropic API key for AI-powered suggestions (defaults to the ANTHROPIC_API_KEY env var)')
+  .option(
+    '--provider <name>',
+    'Which AI service to use: anthropic (Claude), openai (ChatGPT), or gemini. Defaults to auto-detecting from whichever *_API_KEY env var is set.'
+  )
+  .option('--api-key <key>', 'API key for the chosen AI provider (defaults to that provider\'s own env var, e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY)')
   .option('--offline', 'Skip AI and use the offline heuristic only, even if an API key is available', false)
   .option('--rename', 'Rename the folder to the suggested name', false)
   .option('--yes', 'Skip the rename confirmation prompt', false)
@@ -755,7 +759,7 @@ program
     let suggestion;
     const thinkingSpinner = createSpinner('Thinking of a good name...');
     try {
-      suggestion = await suggestName(targetDir, { depth, apiKey: options.apiKey, offline: options.offline });
+      suggestion = await suggestName(targetDir, { depth, apiKey: options.apiKey, provider: options.provider, offline: options.offline });
       thinkingSpinner.stop();
     } catch (err) {
       thinkingSpinner.stop();
@@ -769,7 +773,8 @@ program
       return;
     }
 
-    console.log(colors.bold(`Suggested name (${suggestion.mode}): `) + colors.success(suggestion.name));
+    const modeLabel = suggestion.mode === 'ai' ? `ai: ${suggestion.provider}` : suggestion.mode;
+    console.log(colors.bold(`Suggested name (${modeLabel}): `) + colors.success(suggestion.name));
     console.log(colors.dim(suggestion.reason));
     if (suggestion.warning) console.log(colors.warn(`Note: ${suggestion.warning}`));
 

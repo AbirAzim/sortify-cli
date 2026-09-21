@@ -266,28 +266,35 @@ filename pattern (e.g. `invoice_2024_01.pdf`, `invoice_2024_02.pdf` →
 `Invoice`) or the dominant file category, plus a date range from file
 modification times. This is what you get automatically, every time.
 
-### Optional: smarter suggestions via Claude (needs an API key)
+### Optional: smarter suggestions via an AI (needs an API key)
 
-If you want a more natural-sounding suggestion, `sortify` can ask Claude
-instead — but only if you give it an API key; **without one, it just quietly
-uses the offline method above, which already works fine for most folders.**
+If you want a more natural-sounding suggestion, `sortify` can ask an AI
+instead — **Claude, ChatGPT, or Gemini, your choice** — but only if you give
+it an API key; **without one, it just quietly uses the offline method above,
+which already works fine for most folders.**
 
-To turn this on:
+| Provider | Get a key at | Env var |
+| --- | --- | --- |
+| Claude (Anthropic) | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) | `ANTHROPIC_API_KEY` |
+| ChatGPT (OpenAI) | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | `OPENAI_API_KEY` |
+| Gemini (Google) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | `GEMINI_API_KEY` |
 
-1. Create an account and an API key at
-   **[console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)**.
-   This is a separate, pay-as-you-go developer account — it is **not** the
-   same as a Claude.ai / Claude Pro subscription, and it needs a payment
-   method attached before it will make real requests. (Cost per suggestion
-   is tiny — a fraction of a cent — but it isn't free.)
-2. Give the key to `sortify` one of two ways:
-   ```bash
-   export ANTHROPIC_API_KEY="sk-ant-..."     # once per terminal session (or add to ~/.zshrc)
-   sortify suggest ~/Downloads/New_Folder
+Each is a separate, pay-as-you-go developer account — **not** the same as
+any consumer subscription (Claude Pro, ChatGPT Plus, etc.) — and needs a
+payment method on file before it makes real requests (Gemini has a free
+tier). Cost per suggestion is tiny either way — a fraction of a cent.
 
-   # or, without setting anything permanently:
-   sortify suggest ~/Downloads/New_Folder --api-key "sk-ant-..."
-   ```
+Set whichever one's env var and `sortify` picks it up automatically — no
+extra flag needed:
+```bash
+export OPENAI_API_KEY="sk-..."     # once per terminal session (or add to ~/.zshrc)
+sortify suggest ~/Downloads/New_Folder
+```
+If more than one is set, Claude wins by default; pass `--provider` to be
+explicit, or to use a key without setting an env var:
+```bash
+sortify suggest ~/Downloads/New_Folder --provider gemini --api-key "..."
+```
 
 If the key is missing, wrong, or there's no internet connection, `sortify`
 doesn't error out — it silently falls back to the offline method and tells
@@ -309,10 +316,14 @@ src/history.js          # Append-only JSON run log (.sortify/history.json)
 src/undo.js             # Reverses recorded runs
 src/suggest/analyze.js  # Local content signals: categories, filenames, mtimes, markers
 src/suggest/heuristic.js # Offline name suggestion (no network)
-src/suggest/ai.js        # Anthropic-powered name suggestion (opt-in via API key)
 src/suggest/projectName.js # Reads the declared name from project manifests
-src/suggest/index.js     # Picks AI vs. heuristic, handles fallback
+src/suggest/index.js     # Picks a provider (or offline), handles fallback
+src/suggest/providers/promptUtils.js # Shared prompt text + response parsing
+src/suggest/providers/anthropic.js   # Claude (opt-in via ANTHROPIC_API_KEY)
+src/suggest/providers/openai.js      # ChatGPT (opt-in via OPENAI_API_KEY)
+src/suggest/providers/gemini.js      # Gemini (opt-in via GEMINI_API_KEY)
 src/ui/colors.js        # Color palette (kleur), auto-disabled when not a TTY
 src/ui/progress.js      # Progress bar for larger batches
 src/ui/spinner.js       # Indeterminate spinner (scanning, AI network calls)
+src/ui/terminal.js      # Unicode-support detection (Windows console fallback)
 ```
