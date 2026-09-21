@@ -1,6 +1,6 @@
 {
   "name": "sortify-cli",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Organize the files in a folder into meaningfully named subfolders by content type (Images, Documents, Videos, ...), with an interactive wizard, undo, and AI-optional smart naming.",
   "bin": {
     "sortify": "bin/sortify.js"
