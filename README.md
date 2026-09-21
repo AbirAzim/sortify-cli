@@ -56,17 +56,37 @@ folder. `sortify` asks:
 Every file here is Images — "Images" alone isn't very descriptive.
 ? How would you like to organize these? › - Use arrow-keys. Return to submit.
 ❯   Combine them into one folder called "Vacation_Aug_2024"
-    Split them into multiple folders, grouped by month (e.g. "Images_Jan_2024")
+    Split by filename pattern (e.g. "Invoice" — 2 patterns found)
+    Split by month (e.g. "Images_Jan_2024")
+    Split by year (e.g. "Images_2024")
+    Split by file type (.jpg, .png, .gif)
     Keep the plain "Images" folder
+    Don't organize these right now — exit without changes
 ```
+
+Only the options that actually make sense for these specific files are shown
+— e.g. "split by month" only appears if the files really span more than one
+month, "split by filename pattern" only if there are genuinely two or more
+distinct naming patterns (not just one shared prefix, and not a generic
+camera prefix like `IMG`), "split by file type" only if there's more than
+one extension in the batch. If none of that applies, you just get Combine,
+Keep plain, and Exit.
 
 - **Combine** — everything into one folder with a name inferred from a
   shared filename pattern (skipping generic ones like `IMG`/`DSC`/`Screenshot`)
   or the date range, e.g. `Invoice_2024` or `Vacation_Aug_2024`.
-- **Split** — only offered when the files actually span more than one month
-  — groups them into several dated folders instead, e.g. `Images_Jan_2024`,
-  `Images_Feb_2024`.
-- **Keep the plain folder** — today's default behavior, unchanged.
+- **Split by filename pattern** — clusters files by a shared naming stem,
+  e.g. `invoice_01.pdf`, `invoice_02.pdf` → `Invoice/`, alongside
+  `receipt_01.pdf`, `receipt_02.pdf` → `Receipt/`.
+- **Split by month / by year** — groups by file modification date at
+  whichever granularity you pick, e.g. `Images_Jan_2024`, `Images_Feb_2024`,
+  or just `Images_2024`, `Images_2025`.
+- **Split by file type** — groups by extension, e.g. `Images_jpg`,
+  `Images_png`.
+- **Keep the plain folder** — today's original behavior: one folder named
+  after the category, unchanged.
+- **Exit without changes** — backs out of organizing this folder entirely;
+  nothing is touched. (Ctrl+C works the same way at any prompt.)
 
 Whichever you pick, it re-shows the plan before anything is actually moved,
 and `sortify undo` reverses it exactly the same way regardless of choice.

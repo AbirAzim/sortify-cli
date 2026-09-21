@@ -10,7 +10,7 @@ const { detectProjectMarkers } = require('./guard');
 const { loadHistory: loadRunHistory } = require('./history');
 const { undo } = require('./undo');
 const { suggestName } = require('./suggest');
-const { suggestNameFromFiles } = require('./suggest/heuristic');
+const { suggestNameFromFiles, toTitleCase, extractStem, groupByFilenamePattern } = require('./suggest/heuristic');
 const colors = require('./ui/colors');
 const { createProgressBar } = require('./ui/progress');
 const { createSpinner } = require('./ui/spinner');
@@ -83,10 +83,11 @@ function monthLabel(date) {
 /**
  * When a batch of files is all one category (a folder that was already
  * homogeneous), the category name alone — "Images", "Documents" — doesn't
- * describe what's actually in it. Computes a better name using the same
- * offline heuristic `suggest` uses, and whether the files span more than
- * one month (which makes splitting into several dated folders an option),
- * from the files already in hand — no extra scan, no network call.
+ * describe what's actually in it. Computes a better combined name (same
+ * offline heuristic `suggest` uses) plus which alternative ways of splitting
+ * the batch actually make sense here — by date, by a distinct filename
+ * pattern, or by file type — all from the files already in hand, no extra
+ * scan and no network call.
  */
 function analyzeHomogeneousBatch(moves, { dryRun }) {
   const byCategory = new Map();
@@ -111,9 +112,27 @@ function analyzeHomogeneousBatch(moves, { dryRun }) {
     : null;
 
   const suggestion = suggestNameFromFiles(names, new Map([[category, moves.length]]), dateRange);
-  const distinctMonths = new Set(fileDates.map((d) => `${d.getFullYear()}-${d.getMonth()}`));
 
-  return { category, suggestion, fileDates, canSplit: distinctMonths.size > 1 };
+  const distinctMonths = new Set(fileDates.map((d) => `${d.getFullYear()}-${d.getMonth()}`));
+  const distinctYears = new Set(fileDates.map((d) => d.getFullYear()));
+
+  const patternGroups = groupByFilenamePattern(names);
+  const patternCoverage = [...patternGroups.values()].reduce((sum, n) => sum + n, 0);
+  const canSplitByPattern = patternGroups.size >= 2 && patternCoverage / names.length >= 0.6;
+
+  const extensions = new Set(names.map((n) => path.extname(n).slice(1).toLowerCase()).filter(Boolean));
+
+  return {
+    category,
+    suggestion,
+    fileDates,
+    canSplitByMonth: distinctMonths.size > 1,
+    canSplitByYear: distinctYears.size > 1,
+    canSplitByPattern,
+    patternGroups,
+    canSplitByExtension: extensions.size > 1,
+    extensions,
+  };
 }
 
 function printSingleCategoryTip(targetDir, moves, { dryRun }) {
@@ -127,60 +146,95 @@ function printSingleCategoryTip(targetDir, moves, { dryRun }) {
   console.log(colors.dim(`     sortify suggest "${categoryPath}" --rename`));
 }
 
+function dateOf(filePath) {
+  try {
+    return new Date(fs.statSync(filePath).mtimeMs);
+  } catch {
+    return new Date();
+  }
+}
+
 /**
- * Asks — with a real select prompt — whether a homogeneous batch of files
- * should be combined into one meaningfully-named folder, split into several
- * dated folders, or left under the plain category name. Returns the
- * resulting `folderNameOverride` (for organize()) and the re-scanned moves
- * reflecting that choice, so the caller can show an updated preview. No-op
- * (returns the input moves unchanged) when there's nothing meaningful to ask.
+ * Asks — with a real select prompt — how a homogeneous batch of files
+ * should be organized: combined into one meaningfully-named folder, split
+ * several different ways (by filename pattern, by month/year, by file
+ * type — whichever ones actually apply to this batch), left under the
+ * plain category name, or not organized at all right now. Returns the
+ * resulting `folderNameOverride` (for organize()), the re-scanned moves
+ * reflecting that choice, and `cancelled: true` if the user chose to exit —
+ * callers must check `cancelled` and stop rather than proceeding to
+ * organize anyway. No-op when there's nothing meaningful to ask.
  */
 async function promptHomogeneousChoice(organizeOptions, moves, { dryRun }) {
   const homogeneous = analyzeHomogeneousBatch(moves, { dryRun });
   if (!homogeneous || !homogeneous.suggestion.name || homogeneous.suggestion.name.toLowerCase() === homogeneous.category.toLowerCase()) {
-    return { folderNameOverride: undefined, moves };
+    return { folderNameOverride: undefined, moves, cancelled: false };
   }
 
-  const { category, suggestion, fileDates, canSplit } = homogeneous;
+  const { category, suggestion, fileDates, canSplitByMonth, canSplitByYear, canSplitByPattern, patternGroups, canSplitByExtension, extensions } =
+    homogeneous;
   console.log(colors.info(`\nEvery file here is ${category} — "${category}" alone isn't very descriptive.`));
 
   const choices = [{ title: `Combine them into one folder called "${suggestion.name}"`, value: 'combine' }];
-  if (canSplit) {
+
+  if (canSplitByPattern) {
+    const [topStem] = [...patternGroups.entries()].sort((a, b) => b[1] - a[1])[0];
     choices.push({
-      title: `Split them into multiple folders, grouped by month (e.g. "${category}_${monthLabel(fileDates[0])}")`,
-      value: 'split',
+      title: `Split by filename pattern (e.g. "${toTitleCase(topStem)}" — ${patternGroups.size} patterns found)`,
+      value: 'split-pattern',
     });
   }
+  if (canSplitByMonth) {
+    choices.push({ title: `Split by month (e.g. "${category}_${monthLabel(fileDates[0])}")`, value: 'split-month' });
+  }
+  if (canSplitByYear) {
+    choices.push({ title: `Split by year (e.g. "${category}_${fileDates[0].getFullYear()}")`, value: 'split-year' });
+  }
+  if (canSplitByExtension) {
+    const sample = [...extensions].slice(0, 3).map((e) => `.${e}`).join(', ');
+    choices.push({ title: `Split by file type (${sample}${extensions.size > 3 ? ', ...' : ''})`, value: 'split-ext' });
+  }
   choices.push({ title: `Keep the plain "${category}" folder`, value: 'plain' });
+  choices.push({ title: "Don't organize these right now — exit without changes", value: 'exit' });
 
   const { howToOrganize } = await prompts(
     { type: 'select', name: 'howToOrganize', message: 'How would you like to organize these?', choices, initial: 0 },
     { onCancel }
   );
 
+  if (howToOrganize === 'exit') {
+    return { folderNameOverride: undefined, moves, cancelled: true };
+  }
+
   let folderNameOverride;
   if (howToOrganize === 'combine') {
     folderNameOverride = () => suggestion.name;
-  } else if (howToOrganize === 'split') {
-    folderNameOverride = ({ filePath, category: cat }) => {
-      let date;
-      try {
-        date = new Date(fs.statSync(filePath).mtimeMs);
-      } catch {
-        date = new Date();
-      }
-      return `${cat}_${monthLabel(date)}`;
+  } else if (howToOrganize === 'split-month') {
+    folderNameOverride = ({ filePath, category: cat }) => `${cat}_${monthLabel(dateOf(filePath))}`;
+  } else if (howToOrganize === 'split-year') {
+    folderNameOverride = ({ filePath, category: cat }) => `${cat}_${dateOf(filePath).getFullYear()}`;
+  } else if (howToOrganize === 'split-pattern') {
+    const qualifyingStems = new Set(patternGroups.keys());
+    folderNameOverride = ({ filename, category: cat }) => {
+      const stem = extractStem(filename);
+      return qualifyingStems.has(stem) ? toTitleCase(stem) : `${cat}_Other`;
+    };
+  } else if (howToOrganize === 'split-ext') {
+    folderNameOverride = ({ filename, category: cat }) => {
+      const ext = path.extname(filename).slice(1).toLowerCase();
+      return ext ? `${cat}_${ext}` : cat;
     };
   }
+  // 'plain' => no override, keep the default category folder
 
   if (!folderNameOverride) {
-    return { folderNameOverride: undefined, moves };
+    return { folderNameOverride: undefined, moves, cancelled: false };
   }
 
   const rescan = await organize({ ...organizeOptions, dryRun: true, folderNameOverride });
   console.log('');
   printMoveSummary(rescan.moves, { dryRun: true });
-  return { folderNameOverride, moves: rescan.moves };
+  return { folderNameOverride, moves: rescan.moves, cancelled: false };
 }
 
 /**
@@ -262,7 +316,11 @@ async function runWizard() {
   console.log('');
   printMoveSummary(preview.moves, { dryRun: true });
 
-  const { folderNameOverride } = await promptHomogeneousChoice(organizeOptions, preview.moves, { dryRun: true });
+  const { folderNameOverride, cancelled } = await promptHomogeneousChoice(organizeOptions, preview.moves, { dryRun: true });
+  if (cancelled) {
+    console.log(colors.dim('\nOkay, nothing was changed. Run me again anytime.'));
+    return;
+  }
 
   const { confirmed } = await prompts({ type: 'confirm', name: 'confirmed', message: 'Go ahead and organize them now?', initial: false }, { onCancel });
   if (!confirmed) {
@@ -374,6 +432,10 @@ program
       let folderNameOverride;
       if (isInteractive) {
         const choice = await promptHomogeneousChoice(organizeOptions, moves, { dryRun: true });
+        if (choice.cancelled) {
+          console.log(colors.dim('\nNothing was changed.'));
+          return;
+        }
         folderNameOverride = choice.folderNameOverride;
         moves = choice.moves;
       } else {

@@ -60,6 +60,40 @@ function commonPrefix(names) {
   return prefix;
 }
 
+/**
+ * Reduces a filename to its "stem": no extension, and no trailing
+ * date/counter digits (invoice_2024_01.pdf -> "invoice_2024", further
+ * trimmed of trailing separators+digits again isn't needed since the loop
+ * below strips only one numeric run — callers that want the bare word use
+ * this alongside their own numeric-suffix stripping where relevant).
+ */
+function extractStem(filename) {
+  let stem = filename.replace(/\.[^.]+$/, '');
+  stem = stem.replace(/[-_\s]*\d{1,8}$/, '');
+  stem = stem.replace(/[-_\s]+$/, '');
+  return stem.toLowerCase();
+}
+
+/**
+ * Clusters filenames by shared stem (e.g. "invoice" across invoice_01.pdf,
+ * invoice_02.pdf; "receipt" across receipt_01.pdf, receipt_02.pdf), for
+ * folders that contain more than one distinct naming pattern rather than
+ * a single one spanning every file. Drops generic stems (IMG, Screenshot,
+ * ...) and any stem that only matches once (not a real pattern).
+ */
+function groupByFilenamePattern(names) {
+  const counts = new Map();
+  for (const name of names) {
+    const stem = extractStem(name);
+    if (stem.length < 3 || GENERIC_PREFIXES.has(stem)) continue;
+    counts.set(stem, (counts.get(stem) || 0) + 1);
+  }
+  for (const [stem, count] of [...counts]) {
+    if (count < 2) counts.delete(stem);
+  }
+  return counts;
+}
+
 function formatDateRange(dateRange) {
   if (!dateRange) return null;
   const { from, to } = dateRange;
@@ -141,4 +175,4 @@ async function suggestNameHeuristic(targetDir, { depth = 1 } = {}) {
   return suggestNameFromFiles(analysis.names, analysis.categoryCounts, analysis.dateRange);
 }
 
-module.exports = { suggestNameHeuristic, suggestNameFromFiles, sanitizeName };
+module.exports = { suggestNameHeuristic, suggestNameFromFiles, sanitizeName, toTitleCase, extractStem, groupByFilenamePattern };
